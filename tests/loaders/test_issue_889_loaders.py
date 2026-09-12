@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -347,7 +348,7 @@ def test_box_loader_loads_file_content() -> None:
     client = FakeHTTPClient(
         [
             FakeResponse({"entries": [{"id": "f1", "name": "notes.txt", "type": "file"}]}),
-            FakeResponse(b"Box notes"),
+            FakeResponse(b"Box notes", headers={"content-type": "text/plain; charset=utf-8"}),
         ]
     )
     docs = BoxLoader(access_token="token", folder_id="0", client=client).load()
@@ -355,6 +356,61 @@ def test_box_loader_loads_file_content() -> None:
     assert docs[0].text == "Box notes"
     assert docs[0].metadata["file_id"] == "f1"
     assert docs[0].metadata["name"] == "notes.txt"
+    assert docs[0].metadata["content_type"] == "text/plain"
+
+
+def test_box_loader_does_not_decode_binary_files_as_text() -> None:
+    from synapsekit.loaders.box import BoxLoader
+
+    client = FakeHTTPClient(
+        [
+            FakeResponse({"entries": [{"id": "f1", "name": "logo.png", "type": "file"}]}),
+            FakeResponse(b"\x89PNG\x00\x01", headers={"content-type": "image/png"}),
+        ]
+    )
+
+    docs = BoxLoader(access_token="token", folder_id="0", client=client).load()
+
+    assert docs[0].text == "[Binary file: image/png]"
+    assert docs[0].metadata["content_type"] == "image/png"
+
+
+def test_box_loader_rejects_invalid_utf8_labeled_as_text() -> None:
+    from synapsekit.loaders.box import BoxLoader
+
+    client = FakeHTTPClient(
+        [
+            FakeResponse({"entries": [{"id": "f1", "name": "notes.txt", "type": "file"}]}),
+            FakeResponse(b"\xff\xfe\x00\x01", headers={"content-type": "text/plain"}),
+        ]
+    )
+
+    docs = BoxLoader(access_token="token", folder_id="0", client=client).load()
+
+    assert docs[0].text == "[Binary file: text/plain]"
+
+
+def test_box_loader_extracts_supported_documents() -> None:
+    from synapsekit.loaders.box import BoxLoader
+
+    client = FakeHTTPClient(
+        [
+            FakeResponse({"entries": [{"id": "f1", "name": "report.pdf", "type": "file"}]}),
+            FakeResponse(b"%PDF-1.7", headers={"content-type": "application/pdf"}),
+        ]
+    )
+
+    with patch(
+        "synapsekit.loaders._content_extraction.FileContentExtractor._run_loader",
+        return_value=[
+            Document(text="First page", metadata={}),
+            Document(text="Second page", metadata={}),
+        ],
+    ) as run_loader:
+        docs = BoxLoader(access_token="token", folder_id="0", client=client).load()
+
+    assert docs[0].text == "First page\n\nSecond page"
+    run_loader.assert_called_once()
 
 
 def test_box_loader_follows_folder_pagination() -> None:

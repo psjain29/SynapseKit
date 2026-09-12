@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import mimetypes
 from typing import Any
 from urllib.parse import quote
 
+from ._content_extraction import FileContentExtractor
 from ._http_utils import http_client
 from ._record_utils import response_json
 from .base import Document
@@ -40,6 +42,7 @@ class BoxLoader:
         self._endpoint_url = endpoint_url.rstrip("/")
         self._client = client
         self._timeout = timeout
+        self._content_extractor = FileContentExtractor(type(self).__name__)
 
     def load(self) -> list[Document]:
         headers = {"Authorization": f"Bearer {self._access_token}"}
@@ -85,8 +88,10 @@ class BoxLoader:
                 )
                 content_response.raise_for_status()
                 content = getattr(content_response, "content", b"")
+                filename = str(file_data.get("name", ""))
+                content_type = self._content_type(content_response, filename)
                 if isinstance(content, bytes):
-                    text = content.decode("utf-8", errors="replace")
+                    text = self._content_extractor.extract(filename, content, content_type)
                 else:
                     text = str(content)
                 documents.append(
@@ -100,10 +105,21 @@ class BoxLoader:
                             "source": "box",
                             "row": index,
                             "file_id": file_data.get("id"),
+                            "content_type": content_type,
                         },
                     )
                 )
         return documents
+
+    @staticmethod
+    def _content_type(response: Any, filename: str) -> str | None:
+        headers = getattr(response, "headers", {})
+        content_type = None
+        if hasattr(headers, "get"):
+            content_type = headers.get("content-type") or headers.get("Content-Type")
+        if isinstance(content_type, str) and content_type:
+            return content_type.partition(";")[0].strip().lower()
+        return mimetypes.guess_type(filename)[0]
 
     async def aload(self) -> list[Document]:
         loop = asyncio.get_running_loop()

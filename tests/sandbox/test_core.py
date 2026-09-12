@@ -39,6 +39,40 @@ async def _open_fake(tmp_path: Path) -> tuple[PCSandbox, object]:
     return sandbox, environment
 
 
+def test_pc_sandbox_accepts_max_output_bytes(tmp_path: Path) -> None:
+    sandbox = PCSandbox(
+        base=tmp_path,
+        backend="fake",
+        state_dir=tmp_path / "sessions",
+        max_output_bytes=4096,
+    )
+
+    assert sandbox.config.max_output_bytes == 4096
+
+
+def test_attach_restores_max_output_bytes(tmp_path: Path) -> None:
+    async def scenario() -> None:
+        base = tmp_path / "host"
+        base.mkdir()
+        state_dir = tmp_path / "sessions"
+        sandbox = PCSandbox(
+            base=base,
+            backend="fake",
+            state_dir=state_dir,
+            max_output_bytes=4096,
+        )
+        await sandbox.start()
+        assert sandbox.session_id is not None
+
+        attached = await PCSandbox.attach(sandbox.session_id, state_dir=state_dir)
+        try:
+            assert attached.config.max_output_bytes == 4096
+        finally:
+            await attached.discard()
+
+    _run(scenario())
+
+
 def test_snapshot_diff_eval_and_apply(tmp_path: Path) -> None:
     async def scenario() -> None:
         sandbox, environment = await _open_fake(tmp_path)
